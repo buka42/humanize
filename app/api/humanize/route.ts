@@ -38,39 +38,49 @@ WAŻNE: Zawsze zwracaj cały przerobiony tekst z zachowanym oryginalnym formatow
 const encoder = new TextEncoder();
 
 async function* makeHumanizeIterator(text: string): AsyncGenerator<Uint8Array> {
-  const stream = client.messages.stream({
-    model: "claude-sonnet-4-6",
-    max_tokens: 8192,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: `Zhumanizuj poniższy tekst naukowy zgodnie z podanymi zasadami:\n\n${text}`,
-      },
-    ],
-  });
+  try {
+    const stream = client.messages.stream({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8192,
+      system: SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: `Zhumanizuj poniższy tekst naukowy zgodnie z podanymi zasadami:\n\n${text}`,
+        },
+      ],
+    });
 
-  for await (const chunk of stream) {
-    if (
-      chunk.type === "content_block_delta" &&
-      chunk.delta.type === "text_delta" &&
-      chunk.delta.text
-    ) {
-      yield encoder.encode(`data: ${JSON.stringify({ delta: chunk.delta.text })}\n\n`);
+    for await (const chunk of stream) {
+      if (
+        chunk.type === "content_block_delta" &&
+        chunk.delta.type === "text_delta" &&
+        chunk.delta.text
+      ) {
+        yield encoder.encode(`data: ${JSON.stringify({ delta: chunk.delta.text })}\n\n`);
+      }
     }
-  }
 
-  yield encoder.encode("data: [DONE]\n\n");
+    yield encoder.encode("data: [DONE]\n\n");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Błąd podczas humanizacji";
+    yield encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`);
+    yield encoder.encode("data: [DONE]\n\n");
+  }
 }
 
 function iteratorToStream(iterator: AsyncGenerator<Uint8Array>): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const { value, done } = await iterator.next();
-      if (done) {
+      try {
+        const { value, done } = await iterator.next();
+        if (done) {
+          controller.close();
+        } else {
+          controller.enqueue(value);
+        }
+      } catch {
         controller.close();
-      } else {
-        controller.enqueue(value);
       }
     },
   });
