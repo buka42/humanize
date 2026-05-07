@@ -1,6 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 const client = new Anthropic();
 
 const SYSTEM_PROMPT = `Jesteś ekspertem od redakcji i głębokiej humanizacji tekstów naukowych na poziomie pracy magisterskiej. Twoim zadaniem jest stworzenie finalnej, w pełni naturalnej wersji tekstu.
@@ -33,6 +35,47 @@ Zasady redakcji:
 
 WAŻNE: Zawsze zwracaj cały przerobiony tekst z zachowanym oryginalnym formatowaniem (Markdown lub czysty tekst z nagłówkami). Nie dodawaj żadnych wstępnych komentarzy typu „Oto poprawiona wersja", „Przerobiony tekst:" itp. – zaczynaj bezpośrednio od treści pracy. Pisz wyłącznie w języku polskim.`;
 
+const encoder = new TextEncoder();
+
+async function* makeHumanizeIterator(text: string): AsyncGenerator<Uint8Array> {
+  const stream = client.messages.stream({
+    model: "claude-sonnet-4-6",
+    max_tokens: 8192,
+    system: SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: `Zhumanizuj poniższy tekst naukowy zgodnie z podanymi zasadami:\n\n${text}`,
+      },
+    ],
+  });
+
+  for await (const chunk of stream) {
+    if (
+      chunk.type === "content_block_delta" &&
+      chunk.delta.type === "text_delta" &&
+      chunk.delta.text
+    ) {
+      yield encoder.encode(`data: ${JSON.stringify({ delta: chunk.delta.text })}\n\n`);
+    }
+  }
+
+  yield encoder.encode("data: [DONE]\n\n");
+}
+
+function iteratorToStream(iterator: AsyncGenerator<Uint8Array>): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { value, done } = await iterator.next();
+      if (done) {
+        controller.close();
+      } else {
+        controller.enqueue(value);
+      }
+    },
+  });
+}
+
 export async function POST(req: NextRequest) {
   let text: string;
   try {
@@ -45,49 +88,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Nieprawidłowe żądanie" }, { status: 400 });
   }
 
-  const encoder = new TextEncoder();
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        const anthropicStream = await client.messages.stream({
-          model: "claude-sonnet-4-6",
-          max_tokens: 8192,
-          system: SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: `Zhumanizuj poniższy tekst naukowy zgodnie z podanymi zasadami:\n\n${text}`,
-            },
-          ],
-        });
-
-        for await (const chunk of anthropicStream) {
-          if (
-            chunk.type === "content_block_delta" &&
-            chunk.delta.type === "text_delta"
-          ) {
-            const data = JSON.stringify({ delta: chunk.delta.text });
-            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-          }
-        }
-
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Błąd podczas humanizacji";
-        const data = JSON.stringify({ error: message });
-        controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-        controller.close();
-      }
-    },
-  });
+  const iterator = makeHumanizeIterator(text);
+  const stream = iteratorToStream(iterator);
 
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
     },
   });
 }

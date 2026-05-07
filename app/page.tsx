@@ -55,10 +55,13 @@ export default function Home() {
             const payload = line.slice(6);
             if (payload === "[DONE]") break;
             try {
-              const { delta } = JSON.parse(payload) as { delta?: string };
-              if (delta) setOutputText((prev) => prev + delta);
-            } catch {
-              // skip malformed chunks
+              const parsed = JSON.parse(payload) as { delta?: string; error?: string };
+              if (parsed.error) throw new Error(parsed.error);
+              if (parsed.delta) setOutputText((prev) => prev + parsed.delta);
+            } catch (parseErr) {
+              if (parseErr instanceof Error && parseErr.message !== "Unexpected token") {
+                throw parseErr;
+              }
             }
           }
         }
