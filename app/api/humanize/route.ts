@@ -3,8 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-const client = new Anthropic();
-
 const SYSTEM_PROMPT = `Jesteś ekspertem od redakcji i głębokiej humanizacji tekstów naukowych na poziomie pracy magisterskiej. Twoim zadaniem jest stworzenie finalnej, w pełni naturalnej wersji tekstu.
 
 Twoja rola:
@@ -39,6 +37,7 @@ const encoder = new TextEncoder();
 
 async function* makeHumanizeIterator(text: string): AsyncGenerator<Uint8Array> {
   try {
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const stream = client.messages.stream({
       model: "claude-sonnet-4-6",
       max_tokens: 8192,
